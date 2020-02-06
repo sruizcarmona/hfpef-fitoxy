@@ -276,12 +276,63 @@ VRESERVE <- 1.8 # VO2 Knee extension / VO2 cycle; sets a lower bound on vmax (de
 ########################
 # SRC FUNCTIONS TO CALCULATE ALL
 calc_params <- function(meas) {
-  dp <- mutate(meas,
-               o2ct.art = mapply(o2ct,x=pao2,hb=hb,flag=0)/10, # mL O2/ dL blood
-               o2ct.ven = mapply(o2ct,x=pvo2,hb=hb,flag=0)/10, # mL O2/ dL blood
+  dp <- meas
+  dp <- mutate(dp,
+               o2ct.art = 0.0032*pao2+1.4*hb*satao2/100, #SRC
+               o2ct.ven = 0.0032*pvo2+1.4*hb*satcvo2/100, #SRC
+               avo2 = o2ct.art - o2ct.ven) # mL/dL
+  if (!has_name(dp,"q")) {
+    if (!has_name(dp,"vo2")) {
+      cat("Impossible to calculate without Q or VO2\n")
+      return()
+    }
+    dp <- mutate(dp,
+                 q = 0.1*vo2/avo2)
+  }
+  if (!has_name(dp,"vo2")) {
+    dp <- mutate(dp,
+                 vo2 = q*avo2/0.1)
+  }
+  if (!has_name(dp,"vco2")){
+      #check missing variables
+      if (is.null(dp$pha) || is.null(dp$phv) || is.null(dp$paco2) || is.null(dp$pvco2) || is.null(dp$satao2) || is.null(dp$satcvo2)) {
+        cat("Impossible to calculate VCO2, missing values! Please check your input\n")
+        return()
+      }
+      #define vars
+      plasmatemp <- 37
+      pha <- meas$pha
+      phv <- meas$phv
+      paco2 <- meas$paco2
+      pvco2 <- meas$pvco2
+      satao2 <- meas$satao2
+      satcvo2 <- meas$satcvo2
+      hb <- meas$hb
+      q <- meas$q
+      #calculate art and ven co2 sol
+      co2.s <- 0.0307+(0.00057*(37-plasmatemp))+(0.00002*(37-plasmatemp)^2)
+      #calculate apparent pk, pkprime, art and ven
+      co2.pkp.art <- 6.086+(0.042*(7.4-pha))+((38-plasmatemp)*(0.00472+0.00139*(7.4-pha)))
+      co2.pkp.ven <- 6.086+(0.042*(7.4-phv))+((38-plasmatemp)*(0.00472+0.00139*(7.4-phv)))
+      #plasma co2 content, art and ven
+      co2.plasma.art <- 2.226*co2.s*paco2*(1+10^(pha-co2.pkp.art))
+      co2.plasma.ven <- 2.226*co2.s*pvco2*(1+10^(pha-co2.pkp.ven))
+      #blood co2 content, art and ven
+      co2ct.art <- co2.plasma.art*(1-(0.0289*hb)/((3.352-0.456*satao2)*(8.142-pha)))
+      co2ct.ven <- co2.plasma.ven*(1-(0.0289*hb)/((3.352-0.456*satcvo2)*(8.142-phv)))
+      dp <- mutate(dp,
+                    co2ct.art=co2ct.art,
+                    co2ct.ven=co2ct.ven,
+                    vco2=10*q*(co2ct.ven-co2ct.art))
+  }
+  dp <- mutate(dp,
+               # o2ct.art = 0.0032*pao2+1.4*hb*satao2/100, #SRC
+               # o2ct.ven = 0.0032*pvo2+1.4*hb*satcvo2/100, #SRC
+               # o2ct.art = mapply(o2ct,x=pao2,hb=hb,flag=0)/10, # mL O2/ dL blood
+               # o2ct.ven = mapply(o2ct,x=pvo2,hb=hb,flag=0)/10, # mL O2/ dL blood
+               # avo2 = o2ct.art - o2ct.ven, # mL/dL
+               # q = 0.1*vo2/avo2,q, # L/min
                va=vco2/(K*paco2), # L/min (BTPS), vco2 in mL/min (STPD)
-               avo2 = o2ct.art - o2ct.ven, # mL/dL
-               q = 0.1*vo2/avo2, # L/min
                o2deliv = q*o2ct.art*10/1000, # L O2/min
                pA = PIO2-vo2/(va*K), # vo2 in mL/min (STPD)
                vmax = VRESERVE*vo2, # mL O2/min
@@ -433,7 +484,7 @@ server <- function(input, output,session) {
           pTitle <- expression("Correlation between Q and V"["O"[2]])
           pxLab <- expression("V"["O"[2]]*" (L/min)")
           pyLab <- "Q (L/min)"
-          create_cor_plot(plot_data,"vo2","q",1,40,c(0,6),c(0,50),c(pTitle,pxLab,pyLab)) 
+          create_cor_plot(plot_data,"vo2","q",0,40,c(0,5),c(0,50),c(pTitle,pxLab,pyLab)) 
    }, ignoreNULL = FALSE)
 
     #plot 2
@@ -446,7 +497,7 @@ server <- function(input, output,session) {
         pTitle <- expression("Correlation between V"["A"]*" and V"["O"[2]])
         pxLab <- expression("V"["O"[2]]*" (L/min)")
         pyLab <- expression("V"["A"]* " (L/min)")
-        create_cor_plot(plot_data,"vo2","va",1,130,c(0,6),c(0,150),c(pTitle,pxLab,pyLab))
+        create_cor_plot(plot_data,"vo2","va",0,130,c(0,5),c(0,150),c(pTitle,pxLab,pyLab))
     },ignoreNULL=F)
 
     #plot 3
@@ -459,7 +510,7 @@ server <- function(input, output,session) {
         pTitle <- expression("Correlation between D"["L"]*" and V"["O"[2]])
         pxLab <- expression("V"["O"[2]]*" (L/min)")
         pyLab <- expression("D"["L"]* " (mL/min" %.% "mmHg)")
-        create_cor_plot(plot_data[c(-7,-2,-3),],"vo2","dlo2",0,150,c(0,6),c(0,170),c(pTitle,pxLab,pyLab))
+        create_cor_plot(plot_data[c(-7,-2,-3),],"vo2","dlo2",0,80,c(0,5),c(0,100),c(pTitle,pxLab,pyLab))
     },ignoreNULL=F)
 
     #plot 4
@@ -472,7 +523,7 @@ server <- function(input, output,session) {
         pTitle <- expression("Correlation between D"["M"]*" and V"["O"[2]])
         pxLab <- expression("V"["O"[2]]*" (L/min)")
         pyLab <- expression("D"["M"]* " (mL/min" %.% "mmHg)")
-        create_cor_plot(plot_data,"vo2","dmo2",0,100,c(0,6),c(0,120),c(pTitle,pxLab,pyLab))
+        create_cor_plot(plot_data,"vo2","dmo2",0,100,c(0,5),c(0,120),c(pTitle,pxLab,pyLab))
     },ignoreNULL=F)
     
     output$dl <- downloadHandler(
