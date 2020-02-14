@@ -349,7 +349,7 @@ calc_all <- function(meas){
 ### read preloaded file to make plots
 library(readxl)
 library(writexl)
-precomp_data <- read_excel('data/Combined data_ESC_abstract_31012020_CALCULATED.xlsx')
+precomp_data <- read_excel('data/Combined data_ESC_abstract_060220120_CALCULATED.xlsx')
 my_data <- precomp_data
 #########
 ## COR PLOT
@@ -396,13 +396,16 @@ ui <- fluidPage(
                 textInput("newgroup","Group",value = "NEW",width=120),
                 numericInput("vo2","VO2 (ml/min)",value = 4500,width=120),
                 numericInput("vco2","VCO2 (ml/min)",value = 3600,width=120),
-                numericInput("paco2","PaCO2 (mmHg)",value = 35,width=120),
                 numericInput("pao2","PaO2 (mmHg)",value = 80,width=120),
                 numericInput("pvo2","PvO2 (mmHg)",value = 20,width=120),
                 numericInput("hb","Hb (g/dL)",value = 14,width=120),
                 numericInput("q","Q (L/min)",value = 26,width=120),
                 numericInput("sato2a","SatO2_a (%)",value = 96,width=120),
                 numericInput("sato2v","SatO2_v (%)",value = 23,width=120),
+                numericInput("paco2","PaCO2 (mmHg)",value = 35,width=120),
+                numericInput("pvco2","PvCO2 (mmHg)",value = 50,width=120),
+                numericInput("pha","pH arterial",value = 7.34,width=120),
+                numericInput("phv","pH venous",value = 7.21,width=120),
                 width=3),           
     mainPanel(
               fluidRow(
@@ -432,12 +435,16 @@ server <- function(input, output,session) {
     output$inData <- renderTable( indata())
     indata <- eventReactive(input$newpatient, {
       if(input$newpatient>0){
-        newrow <- isolate(c(input$newpatient, input$vo2,input$vco2,input$paco2,input$pao2,input$pvo2,
-                            input$hb,input$q,input$sato2a,input$sato2v,
+        newrow <- isolate(c(input$newpatient, input$vo2,input$vco2,input$pao2,input$pvo2,
+                            input$hb,input$q,input$sato2a,input$sato2v,input$paco2,input$pvco2,input$pha,input$phv,
                             input$newgroup))
-        newtab <- as.data.frame(matrix(data=as.numeric(newrow),ncol=11,byrow=T))
-        newtab[11] <- input$newgroup
-        colnames(newtab)<-tolower(c("id","VO2","VCO2","PaCO2","PaO2","PvO2","Hb","Q","satao2","satcvo2","group"))
+        newtab <- as.data.frame(matrix(data=as.numeric(newrow),ncol=14,byrow=T))
+        newtab[14] <- input$newgroup
+        colnames(newtab)<-tolower(c("id","VO2","VCO2","PaO2","PvO2","Hb","Q","satao2","satcvo2","PaCO2","PvCO2","pha","phv","group"))
+        #check if any of the optional variables is there and remove it otherwise
+        if (is.na(newtab$q)) {newtab <- newtab[,names(newtab) != 'q']}
+        if (is.na(newtab$vo2)) {newtab <- newtab[,names(newtab) != 'vo2']}
+        if (is.na(newtab$vco2)) {newtab <- newtab[,names(newtab) != 'vco2']}
         newtab$id <- paste(as.integer(input$newpatient),input$newgroup,sep="_")
         #append new calculations to old data
         my_data <<- plyr::rbind.fill(my_data,calc_all(newtab))
@@ -465,7 +472,7 @@ server <- function(input, output,session) {
     #print list of all new patients
     output$alldata <- renderTable( df())
     df <- eventReactive(input$newpatient, {
-          my_data[seq(70,dim(my_data)[1]),]
+          my_data[seq(38,dim(my_data)[1]),]
     })
 
     #reset my_data
@@ -484,7 +491,7 @@ server <- function(input, output,session) {
           pTitle <- expression("Correlation between Q and V"["O"[2]])
           pxLab <- expression("V"["O"[2]]*" (L/min)")
           pyLab <- "Q (L/min)"
-          create_cor_plot(plot_data,"vo2","q",0,40,c(0,5),c(0,50),c(pTitle,pxLab,pyLab)) 
+          create_cor_plot(plot_data,"vo2","q",0,25,c(0,5),c(0,30),c(pTitle,pxLab,pyLab)) 
    }, ignoreNULL = FALSE)
 
     #plot 2
@@ -510,7 +517,7 @@ server <- function(input, output,session) {
         pTitle <- expression("Correlation between D"["L"]*" and V"["O"[2]])
         pxLab <- expression("V"["O"[2]]*" (L/min)")
         pyLab <- expression("D"["L"]* " (mL/min" %.% "mmHg)")
-        create_cor_plot(plot_data[c(-7,-2,-3),],"vo2","dlo2",0,80,c(0,5),c(0,100),c(pTitle,pxLab,pyLab))
+        create_cor_plot(plot_data[c(-7,-2,-3),],"vo2","dlo2",0,40,c(0,5),c(0,50),c(pTitle,pxLab,pyLab))
     },ignoreNULL=F)
 
     #plot 4
