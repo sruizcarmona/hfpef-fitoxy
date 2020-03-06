@@ -376,6 +376,7 @@ create_cor_plot <- function(pData, xVar, yVar,legx,legy,myxlim=c(0,100),myylim=c
 ######################################################################################################################################################
 # Define UI for app that draws a histogram ----
 ui <- fluidPage(
+  theme = shinythemes::shinytheme("cosmo"),
   titlePanel("HFpEF Project (Algorithm 1)"),
 
   sidebarLayout(
