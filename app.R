@@ -374,172 +374,179 @@ create_cor_plot <- function(pData, xVar, yVar,legx,legy,myxlim=c(0,100),myylim=c
 ######################################################################################################################################################
 ######################################################################################################################################################
 ######################################################################################################################################################
-# Define UI for app that draws a histogram ----
 ui <- fluidPage(
   theme = shinythemes::shinytheme("cosmo"),
-  titlePanel("HFpEF Project (Algorithm 1)"),
-
-  sidebarLayout(
-    sidebarPanel(
-                helpText("Calculate all parameters for a new patient, given the following measurements"),
-                hr(),
-                actionButton("update", "Update Plots"),
-                actionButton("reset", "Reset"),
-                hr(),
-                helpText(h3("Download results:")),
-                downloadButton("dl", "Download"),
-                hr(),
-                helpText(h3("1) Upload values:")),
-                helpText("Please, be sure the headers are same as the precomputed data (download above to check)"),
-                fileInput("ul", "Upload excel file", multiple = FALSE, accept = NULL, width = NULL),
-                helpText(h3("2) Or define manually:")),
-                actionButton("newpatient", "Add Patient"),
-                textInput("newgroup","Group",value = "NEW",width=120),
-                numericInput("vo2","VO2 (ml/min)",value = 4500,width=120),
-                numericInput("vco2","VCO2 (ml/min)",value = 3600,width=120),
-                numericInput("pao2","PaO2 (mmHg)",value = 80,width=120),
-                numericInput("pvo2","PvO2 (mmHg)",value = 20,width=120),
-                numericInput("hb","Hb (g/dL)",value = 14,width=120),
-                numericInput("q","Q (L/min)",value = 26,width=120),
-                numericInput("sato2a","SatO2_a (%)",value = 96,width=120),
-                numericInput("sato2v","SatO2_v (%)",value = 23,width=120),
-                numericInput("paco2","PaCO2 (mmHg)",value = 35,width=120),
-                numericInput("pvco2","PvCO2 (mmHg)",value = 50,width=120),
-                numericInput("pha","pH arterial",value = 7.34,width=120),
-                numericInput("phv","pH venous",value = 7.21,width=120),
-                width=3),           
-    mainPanel(
-              fluidRow(
-                       column(12,tableOutput("inDataExcel"))
-                       ),
-              fluidRow(
-                       column(12,tableOutput("inData"))
-                       ),
-              fluidRow(
-                       column(12,tableOutput("alldata"))
-                       ),
-              hr(),
-              fluidRow(
-                       column(6,plotOutput("plotqvo2")),
-                       column(6,plotOutput("plotvavo2"))
-              ),
-              fluidRow(
-                       column(6,plotOutput("plotdlvo2")),
-                       column(6,plotOutput("plotdmvo2"))
-              )
-    )
+  titlePanel("HFpEF Project"),
+  navbarPage("",
+    tabPanel("Algorithm 1",
+             sidebarLayout(
+               sidebarPanel(
+                 helpText("Calculate all parameters for a new patient, given the following measurements"),
+                 hr(),
+                 actionButton("update", "Update Plots"),
+                 actionButton("reset", "Reset"),
+                 hr(),
+                 helpText(h3("Download results:")),
+                 downloadButton("dl", "Download"),
+                 hr(),
+                 helpText(h3("1) Upload values:")),
+                 helpText("Please, be sure the headers are same as the precomputed data (download above to check)"),
+                 fileInput("ul", "Upload excel file", multiple = FALSE, accept = NULL, width = NULL),
+                 helpText(h3("2) Or define manually:")),
+                 actionButton("newpatient", "Add Patient"),
+                 textInput("newgroup","Group",value = "NEW",width=120),
+                 numericInput("vo2","VO2 (ml/min)",value = 4500,width=120),
+                 numericInput("vco2","VCO2 (ml/min)",value = 3600,width=120),
+                 numericInput("pao2","PaO2 (mmHg)",value = 80,width=120),
+                 numericInput("pvo2","PvO2 (mmHg)",value = 20,width=120),
+                 numericInput("hb","Hb (g/dL)",value = 14,width=120),
+                 numericInput("q","Q (L/min)",value = 26,width=120),
+                 numericInput("sato2a","SatO2_a (%)",value = 96,width=120),
+                 numericInput("sato2v","SatO2_v (%)",value = 23,width=120),
+                 numericInput("paco2","PaCO2 (mmHg)",value = 35,width=120),
+                 numericInput("pvco2","PvCO2 (mmHg)",value = 50,width=120),
+                 numericInput("pha","pH arterial",value = 7.34,width=120),
+                 numericInput("phv","pH venous",value = 7.21,width=120),
+                 width=3),
+             mainPanel(
+                 fluidRow(column(12,tableOutput("inDataExcel"))),
+                 fluidRow(column(12,tableOutput("inData"))),
+                 fluidRow(column(12,tableOutput("alldata"))),
+                 hr(),
+                 fluidRow(column(6,plotOutput("plotqvo2")),
+                          column(6,plotOutput("plotvavo2"))),
+                 fluidRow(column(6,plotOutput("plotdlvo2")),
+                          column(6,plotOutput("plotdmvo2")))
+               )
+             )
+    ),
+    tabPanel("Algorithm 2",
+             sidebarLayout(
+               sidebarPanel(width = 3,
+                            actionButton("update", "Update Plots"),
+               ),
+               
+               mainPanel(
+                 # plotOutput("plotqvo22"),
+               )
+             )),
+    tabPanel("Patient Simulation",
+             sidebarLayout(
+               sidebarPanel(width = 3,
+                            actionButton("update", "Update Plots"),
+               ),
+               
+               mainPanel(
+                 # plotOutput("plotqvo22"),
+               )
+             ))
   )
 )
-
-# Define server logic required to draw a histogram ----
 server <- function(input, output,session) {
-    output$inData <- renderTable( indata())
-    indata <- eventReactive(input$newpatient, {
-      if(input$newpatient>0){
-        newrow <- isolate(c(input$newpatient, input$vo2,input$vco2,input$pao2,input$pvo2,
-                            input$hb,input$q,input$sato2a,input$sato2v,input$paco2,input$pvco2,input$pha,input$phv,
-                            input$newgroup))
-        newtab <- as.data.frame(matrix(data=as.numeric(newrow),ncol=14,byrow=T))
-        newtab[14] <- input$newgroup
-        colnames(newtab)<-tolower(c("id","VO2","VCO2","PaO2","PvO2","Hb","Q","satao2","satcvo2","PaCO2","PvCO2","pha","phv","group"))
-        #check if any of the optional variables is there and remove it otherwise
-        if (is.na(newtab$q)) {newtab <- newtab[,names(newtab) != 'q']}
-        if (is.na(newtab$vo2)) {newtab <- newtab[,names(newtab) != 'vo2']}
-        if (is.na(newtab$vco2)) {newtab <- newtab[,names(newtab) != 'vco2']}
-        newtab$id <- paste(as.integer(input$newpatient),input$newgroup,sep="_")
-        #append new calculations to old data
-        my_data <<- plyr::rbind.fill(my_data,calc_all(newtab))
-        #show new patient
-        newtab
-      }
-    }, ignoreNULL = FALSE)
-
-    output$inDataExcel <- renderTable({
-      inFile <- input$ul
-      if (is.null(inFile)){
-        calcdata <<-NULL
-        return(NULL)
-      }
-      inDataExcel <- read_excel(inFile$datapath)
-      colnames(inDataExcel) <- tolower(colnames(inDataExcel))
-      for(i in 1:nrow(inDataExcel)) {
-        row <- inDataExcel[i,]
-        # do stuff with row
-        calcdata <<- rbind(calcdata,calc_all(row))
-      }
-      calcdata
-    })
-    
-    #print list of all new patients
-    output$alldata <- renderTable( df())
-    df <- eventReactive(input$newpatient, {
-          my_data[seq(38,dim(my_data)[1]),]
-    })
-
-    #reset my_data
-    observeEvent(input$reset, {
-        my_data <<- precomp_data
-        session$reload()
-    }) 
-
-    #update plot1
-    output$plotqvo2 <- renderPlot({
-        plotqvo2()
-    })
-    plotqvo2 <- eventReactive(input$update, {
-          plot_data <- plyr::rbind.fill(my_data,calcdata)
-          plot_data$vo2 <- plot_data$vo2/1000
-          pTitle <- expression("Correlation between Q and V"["O"[2]])
-          pxLab <- expression("V"["O"[2]]*" (L/min)")
-          pyLab <- "Q (L/min)"
-          create_cor_plot(plot_data,"vo2","q",0,25,c(0,5),c(0,30),c(pTitle,pxLab,pyLab)) 
-   }, ignoreNULL = FALSE)
-
-    #plot 2
-    output$plotvavo2 <- renderPlot({
-        plotvavo2()
-    })
-    plotvavo2 <- eventReactive(input$update, {
-        plot_data <- plyr::rbind.fill(my_data,calcdata)
-        plot_data$vo2 <- plot_data$vo2/1000
-        pTitle <- expression("Correlation between V"["A"]*" and V"["O"[2]])
-        pxLab <- expression("V"["O"[2]]*" (L/min)")
-        pyLab <- expression("V"["A"]* " (L/min)")
-        create_cor_plot(plot_data,"vo2","va",0,130,c(0,5),c(0,150),c(pTitle,pxLab,pyLab))
-    },ignoreNULL=F)
-
-    #plot 3
-    output$plotdlvo2 <- renderPlot({
-        plotdlvo2()
-    })
-    plotdlvo2 <- eventReactive(input$update, {
-        plot_data <- plyr::rbind.fill(my_data,calcdata)
-        plot_data$vo2 <- plot_data$vo2/1000
-        pTitle <- expression("Correlation between D"["L"]*" and V"["O"[2]])
-        pxLab <- expression("V"["O"[2]]*" (L/min)")
-        pyLab <- expression("D"["L"]* " (mL/min" %.% "mmHg)")
-        create_cor_plot(plot_data[c(-7,-2,-3),],"vo2","dlo2",0,40,c(0,5),c(0,50),c(pTitle,pxLab,pyLab))
-    },ignoreNULL=F)
-
-    #plot 4
-    output$plotdmvo2 <- renderPlot({
-        plotdmvo2()
-    })
-    plotdmvo2 <- eventReactive(input$update, {
-        plot_data <- plyr::rbind.fill(my_data,calcdata)
-        plot_data$vo2 <- plot_data$vo2/1000
-        pTitle <- expression("Correlation between D"["M"]*" and V"["O"[2]])
-        pxLab <- expression("V"["O"[2]]*" (L/min)")
-        pyLab <- expression("D"["M"]* " (mL/min" %.% "mmHg)")
-        create_cor_plot(plot_data,"vo2","dmo2",0,100,c(0,5),c(0,120),c(pTitle,pxLab,pyLab))
-    },ignoreNULL=F)
-    
-    output$dl <- downloadHandler(
-      filename = function() { "outputfile.xlsx"},
-      content = function(file) {write_xlsx(plyr::rbind.fill(my_data,calcdata), path = file)}
-    )
-
+  output$inData <- renderTable( indata())
+  indata <- eventReactive(input$newpatient, {
+    if(input$newpatient>0){
+      newrow <- isolate(c(input$newpatient, input$vo2,input$vco2,input$pao2,input$pvo2,
+                          input$hb,input$q,input$sato2a,input$sato2v,input$paco2,input$pvco2,input$pha,input$phv,
+                          input$newgroup))
+      newtab <- as.data.frame(matrix(data=as.numeric(newrow),ncol=14,byrow=T))
+      newtab[14] <- input$newgroup
+      colnames(newtab)<-tolower(c("id","VO2","VCO2","PaO2","PvO2","Hb","Q","satao2","satcvo2","PaCO2","PvCO2","pha","phv","group"))
+      #check if any of the optional variables is there and remove it otherwise
+      if (is.na(newtab$q)) {newtab <- newtab[,names(newtab) != 'q']}
+      if (is.na(newtab$vo2)) {newtab <- newtab[,names(newtab) != 'vo2']}
+      if (is.na(newtab$vco2)) {newtab <- newtab[,names(newtab) != 'vco2']}
+      newtab$id <- paste(as.integer(input$newpatient),input$newgroup,sep="_")
+      #append new calculations to old data
+      my_data <<- plyr::rbind.fill(my_data,calc_all(newtab))
+      #show new patient
+      newtab
+    }
+  }, ignoreNULL = FALSE)
+  
+  output$inDataExcel <- renderTable({
+    inFile <- input$ul
+    if (is.null(inFile)){
+      calcdata <<-NULL
+      return(NULL)
+    }
+    inDataExcel <- read_excel(inFile$datapath)
+    colnames(inDataExcel) <- tolower(colnames(inDataExcel))
+    for(i in 1:nrow(inDataExcel)) {
+      row <- inDataExcel[i,]
+      # do stuff with row
+      calcdata <<- rbind(calcdata,calc_all(row))
+    }
+    calcdata
+  })
+  
+  #print list of all new patients
+  output$alldata <- renderTable( df())
+  df <- eventReactive(input$newpatient, {
+    my_data[seq(38,dim(my_data)[1]),]
+  })
+  
+  #reset my_data
+  observeEvent(input$reset, {
+    my_data <<- precomp_data
+    session$reload()
+  })
+  
+  #update plot1
+  output$plotqvo2 <- renderPlot({
+    plotqvo2()
+  })
+  plotqvo2 <- eventReactive(input$update, {
+    plot_data <- plyr::rbind.fill(my_data,calcdata)
+    plot_data$vo2 <- plot_data$vo2/1000
+    pTitle <- expression("Correlation between Q and V"["O"[2]])
+    pxLab <- expression("V"["O"[2]]*" (L/min)")
+    pyLab <- "Q (L/min)"
+    create_cor_plot(plot_data,"vo2","q",0,25,c(0,5),c(0,30),c(pTitle,pxLab,pyLab))
+  }, ignoreNULL = FALSE)
+  #plot 2
+  output$plotvavo2 <- renderPlot({
+    plotvavo2()
+  })
+  plotvavo2 <- eventReactive(input$update, {
+    plot_data <- plyr::rbind.fill(my_data,calcdata)
+    plot_data$vo2 <- plot_data$vo2/1000
+    pTitle <- expression("Correlation between V"["A"]*" and V"["O"[2]])
+    pxLab <- expression("V"["O"[2]]*" (L/min)")
+    pyLab <- expression("V"["A"]* " (L/min)")
+    create_cor_plot(plot_data,"vo2","va",0,130,c(0,5),c(0,150),c(pTitle,pxLab,pyLab))
+  },ignoreNULL=F)
+  
+  #plot 3
+  output$plotdlvo2 <- renderPlot({
+    plotdlvo2()
+  })
+  plotdlvo2 <- eventReactive(input$update, {
+    plot_data <- plyr::rbind.fill(my_data,calcdata)
+    plot_data$vo2 <- plot_data$vo2/1000
+    pTitle <- expression("Correlation between D"["L"]*" and V"["O"[2]])
+    pxLab <- expression("V"["O"[2]]*" (L/min)")
+    pyLab <- expression("D"["L"]* " (mL/min" %.% "mmHg)")
+    create_cor_plot(plot_data[c(-7,-2,-3),],"vo2","dlo2",0,40,c(0,5),c(0,50),c(pTitle,pxLab,pyLab))
+  },ignoreNULL=F)
+  
+  #plot 4
+  output$plotdmvo2 <- renderPlot({
+    plotdmvo2()
+  })
+  plotdmvo2 <- eventReactive(input$update, {
+    plot_data <- plyr::rbind.fill(my_data,calcdata)
+    plot_data$vo2 <- plot_data$vo2/1000
+    pTitle <- expression("Correlation between D"["M"]*" and V"["O"[2]])
+    pxLab <- expression("V"["O"[2]]*" (L/min)")
+    pyLab <- expression("D"["M"]* " (mL/min" %.% "mmHg)")
+    create_cor_plot(plot_data,"vo2","dmo2",0,100,c(0,5),c(0,120),c(pTitle,pxLab,pyLab))
+  },ignoreNULL=F)
+  
+  output$dl <- downloadHandler(
+    filename = function() { "outputfile.xlsx"},
+    content = function(file) {write_xlsx(plyr::rbind.fill(my_data,calcdata), path = file)}
+  )
+  
 }
-
 shinyApp(ui = ui, server = server)
-
