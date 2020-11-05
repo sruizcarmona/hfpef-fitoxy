@@ -1,7 +1,6 @@
 library(shiny)
 
 #load libraries
-# library(bvpSolve)
 library(ggplot2)
 library(plyr)
 library(gplots)
@@ -9,19 +8,13 @@ library(tidyverse)
 library(Bolstad2)
 library(bvpSolve) 
 
-#load input data
-my_data <-  c("4632","3655","35","80","21","14.1","25.99","96","23.3","3776","3061","42","97","26","13.3","16.85","98.3","41.7","3661","3048","32","111","26","14.4","21.29","98.7","39.2","5383","4390","34","91","22","15.4","20.62","98.1","29.9","2619","2093","37","89","33","15.9","11.73","97.8","66.6","3617","3039","39","64","27","16.5","17.28","93.1","43.4","4287","5239","35","125","51","16.3","24.46","98.4","35","3479","4631","39","99","27","14.5","26.89","97.8","41","3968","4284","38","104","30","14.1","24.31","98.1","38.8","4745","5857","37","84","24","15.4","28.65","97","28.7","3364","3956","35","86","25","15.4","21.22","97.2","34.7","2091","2767","39","82","26","14.6","12.77","96.6","37.6","3544","4797","39","85","25","15.3","29.24","97.4","40.1","3733","4480","36","105","38","15.7","24.71","98.1","55.8","1338","1456","29","53","21","18.2","8.44","91.2","40","1677","1395","30","67","25","15.3","10.46","92.6","33.1","800","755","28","90","16","13.3","5.48","98","17.3","1128","1130","34","61","26","17.1","9.24","89.2","37.6","1370","1365","23","43","21","15.8","13.55","86.8","45.3","816","859","23","51","19","15.1","5.36","91","35.5","1332","1129","21","60","18","15.7","10.8","91.8","22.2")
-my_data <- as.data.frame(matrix(data=as.numeric(my_data),ncol=9,byrow=T))
-rownames(my_data) <-c(paste("C",seq(14),sep=""),paste("CTEPH",seq(7),sep=""))
-colnames(my_data) <- c("VO2","VCO2","PaCO2","PaO2","PvO2","Hb","Q_exp","satO2_a","satO2_v")
-
 #############
 # NICK HOUSTIS CODE
 ## FUNCTIONS
 #############
 
 #####################
-# DmDlSolver
+# DmDlSolver (Algorithm 1 in the O2 pathway paper)
 # input: pao2, pvo2, q, hb, pA, pmito
 # output: dmo2, dlo2
 #####################
@@ -33,8 +26,8 @@ model <- function(x,y,parms) {
   pmito <- parms$pmito
   # model represented as a list
   return(list( c(
-    (y[3]/(TT*q*o2ct(y[1],hb,1)))*(pA-y[1]), # y[1] = Lung o2 
-    -(y[4]/(TT*q*o2ct(y[2],hb,1)))*(y[2]-pmito), #y [2] = Muscle o2
+    (y[3]/(TT*q*odc(y[1],hb,1)))*(pA-y[1]), # y[1] = Lung o2 
+    -(y[4]/(TT*q*odc(y[2],hb,1)))*(y[2]-pmito), #y [2] = Muscle o2
     0, # y[3] = dlo2
     0  # y[4] = dmo2
   )))
@@ -90,8 +83,74 @@ DmDlSolver <- function(...,pao2,pvo2,q,hb,pA,pmito,
   dmo2 <- Sol[1,"dmo2"]
   dlo2 <- Sol[1,"dlo2"]
   pmcap <- sintegral(Sol[,1],Sol[,"M(x)"])$int / TT # mean value of pmcap(x), computed by integration
+  dmdlpcap <- data.frame(dmo2=dmo2,dlo2=dlo2,pmcap=pmcap)
+  rownames(dmdlpcap) <- NULL
+  return(dmdlpcap)
+}
+
+#####################
+# bgSolver: blood gas solver, with mitochondrial circuit (Algorithm 2 in the O2 pathway paper)
+# input: all the parameters that define the physiology = dmo2, dlo2, q, va, hb, p50, vmax
+# output: blood gases = pao2, pvo2, and therefore vo2
+#####################
+
+model.bg <- function(x,y,parms) {
+  q <- parms$q
+  hb <- parms$hb
+  dmo2 <- parms$dmo2
+  dlo2 <- parms$dlo2
+  va <- parms$va
+  return(list( c(
+    (dlo2/(TT*q*odc(y[1],hb,1)))*((PIO2-(q*(odc(y[5],hb,0)-odc(y[4],hb,0)))/(va*K))-y[1]), # y[1] = Lung o2; rather than use an auxiliary variable for pA I have replaced it with its calculated value
+    -(dmo2/(TT*q*odc(y[2],hb,1)))*(y[2]-y[3]), # y[2] = Muscle o2
+    0, # y[3] = pmito
+    0, # y[4] = pvo2 
+    0  # y[5] = pao2 
+  )))
+}
+
+bound.bg <- function(i,y,parms) { 
+  q <- parms$q
+  hb<- parms$hb
+  va <- parms$va
+  p50 <- parms$p50
+  vmax <- parms$vmax
+  if (i==1) return(y[3]-(p50/(-1+(vmax/(q*(odc(y[5],hb,0)-odc(y[4],hb,0))))))) # pmito formula; y[3] = pmito
+  if (i==2) return(y[1]-y[4]) # at t=0, y[1] = y[4], the unknown constant for pvo2
+  if (i==3) return(y[2]-y[5]) # at t=0, y[2] = y[5], the unknown constant for pao2
+  if (i==4) return(y[1]-y[5]) # at t=T, y[1] = pao2 ie y[5]
+  if (i==5) return(y[2]-y[4]) # at t=T, y[2] = pvo2 ie y[4]
+}
+
+bgSolver <- function(...,va,q,hb,dmo2,dlo2,p50,vmax,
+                     pao2_init=120,pvo2_init=15,pmito_init=5,
+                     stepsize=0.01,errtol=1e-3,NITER=10000) {
   
-  return(data.frame(dmo2=dmo2,dlo2=dlo2,pmcap=pmcap))
+  # initial values
+  xguess = seq(0,TT,by=stepsize)
+  yguess = matrix(nrow = 5, ncol = length(xguess), data = 0)
+  rownames(yguess) <- c("L(x)", "M(x)","pmito","pvo2","pao2")
+  yguess[1,] <- (pvo2_init+(pao2_init-pvo2_init)*xguess/TT) # initialize the venous blood gas in the lung
+  yguess[2,] <- (pao2_init-(pao2_init-pvo2_init)*xguess/TT) # initialize the arterial blood gas in the muscle
+  yguess[3,] <- pmito_init
+  yguess[4,] <- pvo2_init
+  yguess[5,] <- pao2_init
+  
+  # solver call
+  parms <- list(dmo2 = dmo2,dlo2 = dlo2,va=va,q=q,hb=hb,p50=p50,vmax=vmax)
+  
+  Sol <- bvptwp(func = model.bg, bound=bound.bg, x = seq(0, TT, by = stepsize), ynames = c("L(x)", "M(x)","pmito","pvo2","pao2"),parms=parms,atol=errtol,leftbc=3,xguess=xguess,yguess=yguess,verbose=FALSE,nmax=NITER)
+  
+  # solution quantities of interest
+  pao2 <- Sol[1,3]
+  pvo2 <- Sol[1,2] 
+  pmito <- Sol[1,4]
+  avo2 <- (odc(pao2,hb,0)-odc(pvo2,hb,0))/10
+  vo2 <- q*avo2*10
+  pA <- PIO2 - vo2/(va*K)
+  bg <- data.frame(pao2.alg2=pao2,pvo2.alg2=pvo2,avo2.alg2=avo2,vo2.alg2=vo2,pA.alg2=pA,pmito.alg2=pmito,vmax.alg2=vmax,q.alg2=q)
+  rownames(bg) <- NULL
+  return(bg)
 }
 
 
@@ -100,10 +159,11 @@ DmDlSolver <- function(...,pao2,pvo2,q,hb,pA,pmito,
 # Dash-Bassingthwaighte formulation used here, but Kelman is another popular alternative
 ###############
 
-o2ct <- function(x,hb,flag) { #wrapper for odcDB
+odc <- function(x,hb,flag) { #wrapper for odcDB
   if (flag==0) return((0.003*x+1.39*hb*odcDB(x,hb,flag))*10) # o2 content: mL O2/ L blood
   if (flag==1) return(odcDB(x,hb,flag)*hb*1.39*10+0.03) # o2 content DERIVATIVE, ie change in o2 content per delta pao2
 }
+
 
 # Simulation of oxyhemoglobin (HbO2) and carbomino hemoglobin (HbCO2)
 # dissociation curves and computation of total O2 and CO2 contents in 
@@ -247,14 +307,82 @@ odcDB <- function(pO2,hb,flag) {
   if (flag==1) {
     return(beta)
   } else return(SHbO2)
+  
+  
+  
+  ## Some extra variables 
+  # 	HbNH2 = Hbrbc/((Term1*CO2+Term3)+ K4p*O2*(Term2*CO2+Term4))
+  # 	HbNH3p = HbNH2*Hp/K5dp
+  # 	O2HbNH2 = K4p*O2*HbNH2
+  # 	O2HbNH3p = O2HbNH2*Hp/K6dp
+  # 	HbNHCOOH = K2p*CO2*HbNH2
+  # 	HbNHCOOm = K2dp*HbNHCOOH/Hp
+  # 	O2HbNHCOOH = K3p*CO2*O2HbNH2
+  # 	O2HbNHCOOm = K3dp*O2HbNHCOOH/Hp
+  # 	SHbO2kin = (O2HbNH2+O2HbNH3p+O2HbNHCOOH+O2HbNHCOOm)/Hbrbc
+  # 	SHbCO2kin = (HbNHCOOH+HbNHCOOm+O2HbNHCOOH+O2HbNHCOOm)/Hbrbc
+  # 
+  # 	O2freepl1 = Wpl*(1-Hct)*alphaO2*pO2
+  # 	O2freepl2 = 2225.6*O2freepl1
+  # 	O2freerbc1 = Wrbc*Hct*alphaO2*pO2
+  # 	O2freerbc2 = 2225.6*O2freerbc1
+  # 	O2boundrbc1 = 4*Hct*Hbrbc*SHbO2
+  # 	O2boundrbc2 = 2225.6*O2boundrbc1
+  # 	CO2freepl1 = Wpl*(1-Hct)*alphaCO2*pCO2
+  # 	CO2freepl2 = 2225.6*CO2freepl1
+  # 	CO2freerbc1 = Wrbc*Hct*alphaCO2*pCO2
+  # 	CO2freerbc2 = 2225.6*CO2freerbc1
+  # 	CO2bicarbpl1 = Wpl*(1-Hct)*K1*alphaCO2*pCO2/Hppl
+  # 	CO2bicarbpl2 = 2225.6*CO2bicarbpl1
+  # 	CO2bicarbrbc1 = Wrbc*Hct*Rrbc*K1*alphaCO2*pCO2/Hppl
+  # 	CO2bicarbrbc2 = 2225.6*CO2bicarbrbc1
+  # 	CO2boundrbc1 = 4*Hct*Hbrbc*SHbCO2
+  # 	CO2boundrbc2 = 2225.6*CO2boundrbc1
+  
+  #-----------------------------------------------------------------------------
+  # The equations for O2 and CO2 saturations of hemoglobin (SHbO2 and SHbCO2)  
+  # are derived by considering the various kinetic reactions involving the
+  # binding of O2 and CO2 with hemoglobin in RBCs:
+  #
+  #            kf1p       K1dp
+  # 1. CO2+H2O <--> H2CO3 <--> HCO3- + H+  K1=(kf1p/kb1p)*K1dp
+  #            kb1p		K1 = 7.43e-7 M K1dp = 5.5e-4 M
+  #
+  #              kf2p          K2dp
+  # 2. CO2+HbNH2 <--> HbNHCOOH <--> HbNHCOO- + H+  K2=(kf2p/kb2p)*K2dp
+  #              kb2p		K2 = 2.95e-5 K2dp = 1.0e-6 M
+  #
+  #                kf3p            K3dp
+  # 3. CO2+O2HbNH2 <--> O2HbNHCOOH <--> O2HbNHCOO- + H+ K3=(kf3p/kb3p)*K3dp
+  #                kb3p		K3 = 2.51e-5 K3dp = 1.0e-6 M
+  #
+  #              kf4p          
+  # 4. O2+HbNH2 <--> O2HbNH2  K4p=K4dp*func([O2][H+][CO2][DPG]T)
+  #              kb4p		K4dp and K4p are to be determined
+  #
+  #    func = ([O2]/[O2]s)^n0*([H+]s/[H+])^n1*([CO2]s/[CO2])^n2*
+  #           ([DPG]s/[DPG])^n3*(Temps/Temp)^n4
+  #
+  #           K5dp
+  # 5. HbNH3+ <--> HbNH2 + H+  K5 = 2.63e-8 M
+  #
+  #             K6dp
+  # 6. O2HbNH3+ <--> O2HbNH2 + H+  K6 = 1.91e-9 M
+  #
+  # The association and dissociation rate constants of O2 with hemoglobin is
+  # assumed to be dependent on [O2] [H+] [CO2] [DPG] and temperature (Temp)
+  # such that the equilibrium constant K4p is proportional to ([O2]/[O2]s)^n0
+  # ([H+]s/[H+])^n1 ([CO2]s/[CO2])^n2 ([DPG]s/[DPG])^n3 and (Temps/Temp)^n4.
+  # The problem is to estimate the values of the proportionality constant K4dp 
+  # and the indices n0 n1 n2 n3 and n4 such that SHbO2 is 50# at pO2 = 26.8 
+  # mmHg pH = 7.24 pCO2 = 40 mmHg [DPG] = 4.65 mM and Temp = 37 C in RBCs 
+  # and the HbO2 dissociation curve shifts appropriately w.r.t. pH and pCO2.
+  #----------------------------------------------------------------------------
 } 
 
-#####
-# PATHWAY.R
-# CALCULAIONS
-# library(tidyverse)
-# library(Bolstad2)
-# library(bvpSolve) 
+library(tidyverse)
+library(Bolstad2)
+library(bvpSolve) 
 
 
 ########################
@@ -267,83 +395,37 @@ TT = 1 # transit time set arbitrarily to 1 as the calculations are invariant to 
 
 # Mitochondrial constants
 P50REF <- 0.24 # mmHg
-VRESERVE <- 1.8 # VO2 Knee extension / VO2 cycle; sets a lower bound on vmax (derived from Esposito et al 2010)
+VRESERVE <- 1.8 # VO2 Knee extension / VO2 cycle, Vo2 normalized to lean mass of exercise muscle; sets a lower bound on vmax (ratios derived from data in Esposito et al 2010)
 
 ########################
 # Input measurements: pao2 (mmHg), pvo2 (mmHg), paco2 (mmHg), hb (g/dL), vo2 (mL/min), vco2 (mL/min)
 # Output O2 pathway parameters: va (L/min), q (L/min), dmo2 (mL/mmHg/min), dlo2 (mL/mmHg/min), vmax (L/min)
 # Output O2 tensions: pA (mmHg), pmito (mmHg), average pmcap (mmHg)
 ########################
-# SRC FUNCTIONS TO CALCULATE ALL
-calc_params <- function(meas) {
-  dp <- meas
-  dp <- mutate(dp,
-               o2ct.art = 0.0032*pao2+1.4*hb*satao2/100, #SRC
-               o2ct.ven = 0.0032*pvo2+1.4*hb*satcvo2/100, #SRC
-               avo2 = o2ct.art - o2ct.ven) # mL/dL
-  if (!has_name(dp,"q")) {
-    if (!has_name(dp,"vo2")) {
-      cat("Impossible to calculate without Q or VO2\n")
-      return()
-    }
-    dp <- mutate(dp,
-                 q = 0.1*vo2/avo2)
-  }
-  if (!has_name(dp,"vo2")) {
-    dp <- mutate(dp,
-                 vo2 = q*avo2/0.1)
-  }
-  if (!has_name(dp,"vco2")){
-      #check missing variables
-      if (is.null(dp$pha) || is.null(dp$phv) || is.null(dp$paco2) || is.null(dp$pvco2) || is.null(dp$satao2) || is.null(dp$satcvo2)) {
-        cat("Impossible to calculate VCO2, missing values! Please check your input\n")
-        return()
-      }
-      #define vars
-      plasmatemp <- 37
-      pha <- meas$pha
-      phv <- meas$phv
-      paco2 <- meas$paco2
-      pvco2 <- meas$pvco2
-      satao2 <- meas$satao2
-      satcvo2 <- meas$satcvo2
-      hb <- meas$hb
-      q <- meas$q
-      #calculate art and ven co2 sol
-      co2.s <- 0.0307+(0.00057*(37-plasmatemp))+(0.00002*(37-plasmatemp)^2)
-      #calculate apparent pk, pkprime, art and ven
-      co2.pkp.art <- 6.086+(0.042*(7.4-pha))+((38-plasmatemp)*(0.00472+0.00139*(7.4-pha)))
-      co2.pkp.ven <- 6.086+(0.042*(7.4-phv))+((38-plasmatemp)*(0.00472+0.00139*(7.4-phv)))
-      #plasma co2 content, art and ven
-      co2.plasma.art <- 2.226*co2.s*paco2*(1+10^(pha-co2.pkp.art))
-      co2.plasma.ven <- 2.226*co2.s*pvco2*(1+10^(pha-co2.pkp.ven))
-      #blood co2 content, art and ven
-      co2ct.art <- co2.plasma.art*(1-(0.0289*hb)/((3.352-0.456*satao2)*(8.142-pha)))
-      co2ct.ven <- co2.plasma.ven*(1-(0.0289*hb)/((3.352-0.456*satcvo2)*(8.142-phv)))
-      dp <- mutate(dp,
-                    co2ct.art=co2ct.art,
-                    co2ct.ven=co2ct.ven,
-                    vco2=10*q*(co2ct.ven-co2ct.art))
-  }
-  dp <- mutate(dp,
-               # o2ct.art = 0.0032*pao2+1.4*hb*satao2/100, #SRC
-               # o2ct.ven = 0.0032*pvo2+1.4*hb*satcvo2/100, #SRC
-               # o2ct.art = mapply(o2ct,x=pao2,hb=hb,flag=0)/10, # mL O2/ dL blood
-               # o2ct.ven = mapply(o2ct,x=pvo2,hb=hb,flag=0)/10, # mL O2/ dL blood
-               # avo2 = o2ct.art - o2ct.ven, # mL/dL
-               # q = 0.1*vo2/avo2,q, # L/min
-               va=vco2/(K*paco2), # L/min (BTPS), vco2 in mL/min (STPD)
-               o2deliv = q*o2ct.art*10/1000, # L O2/min
-               pA = PIO2-vo2/(va*K), # vo2 in mL/min (STPD)
-               vmax = VRESERVE*vo2, # mL O2/min
-               p50 = P50REF, # mmHg
-               pmito = p50/((vmax/vo2) - 1)) #mmHg
-  return (dp)
+
+# measurements <- data.frame(pao2=97, paco2 = 40, pvo2=21, hb=14, vo2=1600, vco2=1900) # sample values for a single individual
+# o2params <- select(data_params,va,q,hb,p50,vmax) %>% mutate(dmo2=dmdlpcap$dmo2,dlo2=dmdlpcap$dlo2)
+
+calc_alg1 <- function(meas){
+  data_params <- 
+    mutate(meas,
+           o2ct.art = mapply(odc,x=pao2,hb=hb,flag=0)/10, # mL O2/ dL blood
+           o2ct.ven = mapply(odc,x=pvo2,hb=hb,flag=0)/10, # mL O2/ dL blood
+           va=vco2/(K*paco2), # L/min (BTPS), vco2 in mL/min (STPD)
+           avo2 = o2ct.art - o2ct.ven, # mL/dL
+           q = 0.1*vo2/avo2, # L/min
+           o2deliv = q*o2ct.art*10/1000, # L O2/min
+           pA = PIO2-vo2/(va*K), # mmHg; vo2 here in mL O2/min (STPD)
+           vmax = VRESERVE*vo2, # mL O2/min
+           p50 = P50REF, # mmHg
+           pmito = p50/((vmax/vo2) - 1)) #mmHg 
+  finalparams <- do.call(DmDlSolver,data_params)
+  return(cbind(data_params,finalparams))
 }
-calc_all <- function(meas){
-  dataparams <- calc_params(meas)
-  finalparams <- do.call(DmDlSolver,dataparams)
-  return(cbind(dataparams,finalparams))
+
+calc_alg2 <- function(meas){
+  finalparams <- do.call(bgSolver,meas)
+  return(cbind(meas,finalparams))
 }
 
 ### read preloaded file to make plots
@@ -376,8 +458,11 @@ create_cor_plot <- function(pData, xVar, yVar,legx,legy,myxlim=c(0,100),myylim=c
 ######################################################################################################################################################
 ui <- fluidPage(
   theme = shinythemes::shinytheme("cosmo"),
-  titlePanel("HFpEF Project"),
+  titlePanel("HFpEF Project (Houstis Paper Code)"),
   navbarPage("",
+######################################################################################################################################################
+############### TAB 1
+######################################################################################################################################################
     tabPanel("Algorithm 1",
              sidebarLayout(
                sidebarPanel(
@@ -394,24 +479,24 @@ ui <- fluidPage(
                  fileInput("ul", "Upload excel file", multiple = FALSE, accept = NULL, width = NULL),
                  helpText(h3("2) Or define manually:")),
                  actionButton("newpatient", "Add Patient"),
-                 textInput("newgroup","Group",value = "NEW",width=120),
-                 numericInput("vo2","VO2 (ml/min)",value = 4500,width=120),
-                 numericInput("vco2","VCO2 (ml/min)",value = 3600,width=120),
-                 numericInput("pao2","PaO2 (mmHg)",value = 80,width=120),
-                 numericInput("pvo2","PvO2 (mmHg)",value = 20,width=120),
-                 numericInput("hb","Hb (g/dL)",value = 14,width=120),
-                 numericInput("q","Q (L/min)",value = 26,width=120),
-                 numericInput("sato2a","SatO2_a (%)",value = 96,width=120),
-                 numericInput("sato2v","SatO2_v (%)",value = 23,width=120),
-                 numericInput("paco2","PaCO2 (mmHg)",value = 35,width=120),
-                 numericInput("pvco2","PvCO2 (mmHg)",value = 50,width=120),
-                 numericInput("pha","pH arterial",value = 7.34,width=120),
-                 numericInput("phv","pH venous",value = 7.21,width=120),
+                 textInput("newgroup","Group",value = "NEW",width=180),
+                 numericInput("vo2","VO2 (ml/min)",value = 1600,width=180),
+                 numericInput("vco2","VCO2 (ml/min)",value = 1900,width=180),
+                 numericInput("pao2","PaO2 (mmHg)",value = 97,width=180),
+                 numericInput("pvo2","PvO2 (mmHg)",value = 21,width=180),
+                 numericInput("hb","Hb (g/dL)",value = 14,width=180),
+                 # numericInput("q","Q (L/min)",value = 26,width=180),
+                 # numericInput("sato2a","SatO2_a (%)",value = 96,width=180),
+                 # numericInput("sato2v","SatO2_v (%)",value = 23,width=180),
+                 numericInput("paco2","PaCO2 (mmHg)",value = 40,width=180),
+                 # numericInput("pvco2","PvCO2 (mmHg)",value = 50,width=180),
+                 # numericInput("pha","pH arterial",value = 7.34,width=180),
+                 # numericInput("phv","pH venous",value = 7.21,width=180),
                  width=3),
              mainPanel(
-                 fluidRow(column(12,tableOutput("inDataExcel"))),
-                 fluidRow(column(12,tableOutput("inData"))),
-                 fluidRow(column(12,tableOutput("alldata"))),
+                 fluidRow(column(12,DT::dataTableOutput("inDataExcel"),style = "overflow-x: scroll;")),
+                 fluidRow(column(12,DT::dataTableOutput("inData"),style = "overflow-x: scroll;")),
+                 fluidRow(column(12,DT::dataTableOutput("alldata"),style = "overflow-x: scroll;")),
                  hr(),
                  fluidRow(column(6,plotOutput("plotqvo2")),
                           column(6,plotOutput("plotvavo2"))),
@@ -420,51 +505,144 @@ ui <- fluidPage(
                )
              )
     ),
+######################################################################################################################################################
+############### TAB 2
+######################################################################################################################################################
     tabPanel("Algorithm 2",
              sidebarLayout(
-               sidebarPanel(width = 3,
-                            actionButton("update", "Update Plots"),
-               ),
-               
+               sidebarPanel(
+                 helpText("Given all calculated parameters from Algorithm 1, calculate the \"original\" measurements."),
+                 hr(),
+                 actionButton("update.2", "Correlation Plots"),
+                 actionButton("reset.2", "Reset"),
+                 hr(),
+                 helpText(h3("Download results:")),
+                 downloadButton("dl.2", "Download"),
+                 hr(),
+                 helpText(h3("1) Upload values:")),
+                 helpText("Please, be sure the headers are same as the precomputed data (download in Algorithm 1 tab to check)"),
+                 fileInput("ul.2", "Upload excel file", multiple = FALSE, accept = NULL, width = NULL),
+                 helpText(h3("2) Or define manually:")),
+                 actionButton("newpatient.2", "Add Patient"),
+                 textInput("newgroup.2","Group",value = "NEW",width=180),
+                 numericInput("va.2","VA (L/min)",value = 40.98,width=180),
+                 numericInput("q.2","Q (L/min)",value = 12.84,width=180),
+                 numericInput("hb.2","Hb (g/dL)",value = 14,width=180),
+                 numericInput("vmax.2","Vmax (L/min)",value = 2880,width=180),
+                 numericInput("dmo2.2","DM (mL/mmHg/min)",value = 47.35,width=180),
+                 numericInput("dlo2.2","DL (mL/mmHg/min)",value = 22.49,width=180),
+                 numericInput("p50.2","p50 (mmHg)",value=0.24, width=180),
+                 # numericInput("satao2.2","SatO2_a (%)",value = 96,width=180),
+                 # numericInput("satcvo2.2","SatO2_v (%)",value = 23,width=180),
+                 width=3),
                mainPanel(
-                 # plotOutput("plotqvo22"),
+                 fluidRow(column(12,DT::dataTableOutput("inDataExcel.2"),style = "overflow-x: scroll;")),
+                 hr(),
+                 fluidRow(column(12,DT::dataTableOutput("inData.2"),style = "overflow-x: scroll;")),
+                 fluidRow(column(12,DT::dataTableOutput("alldata.2"),style = "overflow-x: scroll;")),
+                 hr(),
+                 fluidRow(column(6,plotOutput("corplot1")),
+                         # column(4,plotOutput("corplot3")),
+                         column(6,plotOutput("corplot2"))),
+                fluidRow(column(6,plotOutput("corplot4")),
+                         column(6,plotOutput("corplot5"))),
+                 # fluidRow(column(6,plotOutput("corplot1")),
+                 #          column(6,plotOutput("corplot2"))),
+                 # fluidRow(column(6,plotOutput("corplot3")),
+                 #          column(6,plotOutput("corplot4"))),
+                 # fluidRow(column(6,plotOutput("corplot5")),
+                 #          column(6,plotOutput("corplot6"))),
+                 # fluidRow(column(6,plotOutput("corplot7")),
+                 #          column(6,plotOutput("corplot8"))),
                )
-             )),
+               )
+             ),
+######################################################################################################################################################
+############### TAB 3
+######################################################################################################################################################
     tabPanel("Patient Simulation",
              sidebarLayout(
                sidebarPanel(width = 3,
-                            actionButton("update", "Update Plots"),
+                            helpText(h3("Step 1:")),
+                            helpText("Create a patient, initial data from a random patient."),
+                            helpText("Feel free to edit any of the fields!"),
+                            actionButton("init_all", "Initiate Patient"),
+                            hr(),
+                            helpText(h3("Step 2:")),
+                            helpText("Run algorithm 1 to calculate all parameters."),
+                            actionButton("calcalg1", "Calculate params (Alg 1)"),
+                            hr(),
+                            helpText(h3("Step 3:")),
+                            helpText("Run algorithm 2 to update initial measurements based on Alg 1 results."),
+                            helpText("Change fields in previous table to check their effect."),
+                            actionButton("calcalg2", "Update measurements (Alg 2)"),
+                            hr(),
+                            helpText(h4("Repeat steps above to play with different measurements and calculated parameters.")),
                ),
                
                mainPanel(
-                 # plotOutput("plotqvo22"),
-               )
+                 fluidRow(column(12,DT::dataTableOutput("init_meas"),style = "overflow-x: scroll;")),
+                 hr(),
+                 fluidRow(column(12,DT::dataTableOutput("calc_param"),style = "overflow-x: scroll;")),
+                 hr(),
+                 fluidRow(column(12,DT::dataTableOutput("final_data"),style = "overflow-x: scroll;")),
+                 )
              ))
   )
 )
+
 server <- function(input, output,session) {
-  output$inData <- renderTable( indata())
+#######################
+## ALGORITHM 1 (TAB 1)
+#######################
+  output$inData <- DT::renderDataTable( indata())
   indata <- eventReactive(input$newpatient, {
     if(input$newpatient>0){
-      newrow <- isolate(c(input$newpatient, input$vo2,input$vco2,input$pao2,input$pvo2,
-                          input$hb,input$q,input$sato2a,input$sato2v,input$paco2,input$pvco2,input$pha,input$phv,
+      newrow <- isolate(c(input$newpatient,
+                          input$vo2,
+                          input$vco2,
+                          input$pao2,
+                          input$pvo2,
+                          input$hb,
+                          input$q,
+                          input$sato2a,
+                          input$sato2v,
+                          input$paco2,
+                          input$pvco2,
+                          input$pha,
+                          input$phv,
                           input$newgroup))
-      newtab <- as.data.frame(matrix(data=as.numeric(newrow),ncol=14,byrow=T))
-      newtab[14] <- input$newgroup
-      colnames(newtab)<-tolower(c("id","VO2","VCO2","PaO2","PvO2","Hb","Q","satao2","satcvo2","PaCO2","PvCO2","pha","phv","group"))
+      newtab <- as.data.frame(matrix(data=as.numeric(newrow),ncol=length(newrow),byrow=T))
+      newtab[length(newrow)] <- input$newgroup
+      colnames(newtab)<-tolower(c("id",
+                                  "VO2",
+                                  "VCO2",
+                                  "PaO2",
+                                  "PvO2",
+                                  "Hb",
+                                  # "Q",
+                                  # "satao2",
+                                  # "satcvo2",
+                                  "PaCO2",
+                                  # "PvCO2",
+                                  # "pha",
+                                  # "phv",
+                                  "group"))
       #check if any of the optional variables is there and remove it otherwise
-      if (is.na(newtab$q)) {newtab <- newtab[,names(newtab) != 'q']}
-      if (is.na(newtab$vo2)) {newtab <- newtab[,names(newtab) != 'vo2']}
-      if (is.na(newtab$vco2)) {newtab <- newtab[,names(newtab) != 'vco2']}
+      # if (is.na(newtab$q)) {newtab <- newtab[,names(newtab) != 'q']}
+      # if (is.na(newtab$vo2)) {newtab <- newtab[,names(newtab) != 'vo2']}
+      # if (is.na(newtab$vco2)) {newtab <- newtab[,names(newtab) != 'vco2']}
       newtab$id <- paste(as.integer(input$newpatient),input$newgroup,sep="_")
       #append new calculations to old data
-      my_data <<- plyr::rbind.fill(my_data,calc_all(newtab))
+      tmpres <- calc_alg1(newtab) %>% mutate_if(is.numeric,round,2)
+      my_data <<- plyr::rbind.fill(my_data,tmpres)
       #show new patient
-      newtab
+      # newtab
+      DT::datatable(newtab,options=list(autoWidth=TRUE,dom='t'))
     }
   }, ignoreNULL = FALSE)
   
-  output$inDataExcel <- renderTable({
+  output$inDataExcel <- DT::renderDataTable({
     inFile <- input$ul
     if (is.null(inFile)){
       calcdata <<-NULL
@@ -472,18 +650,26 @@ server <- function(input, output,session) {
     }
     inDataExcel <- read_excel(inFile$datapath)
     colnames(inDataExcel) <- tolower(colnames(inDataExcel))
+    colnames(inDataExcel)[colnames(inDataExcel) == 'pa'] <- 'pA'
+    
     for(i in 1:nrow(inDataExcel)) {
       row <- inDataExcel[i,]
       # do stuff with row
-      calcdata <<- rbind(calcdata,calc_all(row))
+      #clean and remove dmo2 dlo2 and pmcap
+      if ("dmo2" %in% names(row)) {row <- row[,names(row) != 'dmo2']}
+      if ("dlo2" %in% names(row)) {row <- row[,names(row) != 'dlo2']}
+      if ("pmcap" %in% names(row)) {row <- row[,names(row) != 'pmcap']}
+      tmpres <- calc_alg1(row) %>% mutate_if(is.numeric,round,2)
+      calcdata <<- rbind(calcdata,tmpres)
     }
     calcdata
   })
   
   #print list of all new patients
-  output$alldata <- renderTable( df())
+  output$alldata <- DT::renderDataTable( df())
   df <- eventReactive(input$newpatient, {
-    my_data[seq(38,dim(my_data)[1]),]
+    # my_data[seq(38,dim(my_data)[1]),]
+    DT::datatable(my_data[seq(38,dim(my_data)[1]),],options=list(autoWidth=TRUE,dom='tlip'))
   })
   
   #reset my_data
@@ -491,7 +677,7 @@ server <- function(input, output,session) {
     my_data <<- precomp_data
     session$reload()
   })
-  
+  ################################## PLOTS
   #update plot1
   output$plotqvo2 <- renderPlot({
     plotqvo2()
@@ -547,6 +733,250 @@ server <- function(input, output,session) {
     filename = function() { "outputfile.xlsx"},
     content = function(file) {write_xlsx(plyr::rbind.fill(my_data,calcdata), path = file)}
   )
+  ##########################################################################################################################################
+  ## ALGORITHM 2 (TAB 2)
+  ##########################################################################################################################################
+  resdata <- NULL
+  output$inData.2 <- DT::renderDataTable( indata2())
+  indata2 <- eventReactive(input$newpatient.2, {
+    if(input$newpatient.2>0){
+      newrow <- isolate(c(input$newpatient.2, input$va.2, input$q.2, input$hb.2,input$vmax.2,
+                          input$dmo2.2, input$dlo2.2,input$p50.2,input$satao2.2,input$satcvo2.2,
+                          input$newgroup.2))
+      newtab <- as.data.frame(matrix(data=as.numeric(newrow),ncol=length(newrow),byrow=T))
+      newtab[length(newrow)] <- input$newgroup.2
+      colnames(newtab)<-tolower(c("id",
+                                  "VA",
+                                  "q",
+                                  "hb",
+                                  "vmax",
+                                  "dmo2",
+                                  "dlo2",
+                                  "p50",
+                                  # "satao2",
+                                  # "satcvo2",
+                                  "group"))
+      newtab$id <- paste(as.integer(input$newpatient.2),input$newgroup.2,sep="_")
+      # o2params <- select(newtab,va,q,hb,p50,vmax,dmo2,dlo2)
+      #show new patient
+      tmpres <- calc_alg2(newtab) %>% mutate_if(is.numeric,round,2)
+      resdata <<- plyr::rbind.fill(resdata,tmpres)
+      DT::datatable(newtab,options=list(autoWidth=TRUE,dom='t'))
+    }
+  }, ignoreNULL = FALSE)
+  
+  output$inDataExcel.2 <- DT::renderDataTable({
+    inFile.2 <- input$ul.2
+    if (is.null(inFile.2)){
+      calcdata.2 <<-NULL
+      return(NULL)
+    }
+    inDataExcel.2 <- read_excel(inFile.2$datapath)
+    colnames(inDataExcel.2) <- tolower(colnames(inDataExcel.2))
+    for(i in 1:nrow(inDataExcel.2)) {
+      row <- inDataExcel.2[i,]
+      # o2params <- select(row,va,q,hb,p50,vmax,dmo2,dlo2)
+      tmpres <- calc_alg2(row) %>% mutate_if(is.numeric,round,2)
+      calcdata.2 <<- rbind(calcdata.2,tmpres)
+    }
+    calcdata.2
+  })
+  
+  #print list of all new patients
+  output$alldata.2 <- DT::renderDataTable( df2())
+  df2 <- eventReactive(input$newpatient.2, {
+    # my_data[seq(38,dim(my_data)[1]),]
+    # resdata
+    # DT::datatable(my_data[seq(38,dim(my_data)[1]),],options=list(autoWidth=TRUE,dom='tlip'))
+    DT::datatable(resdata,options=list(autoWidth=TRUE,dom='tlip'))
+  })
+  
+  #reset my_data
+  observeEvent(input$reset.2, {
+    resdata <<- NULL
+    session$reload()
+  })
+  
+  output$dl.2 <- downloadHandler(
+    filename = function() { "outputfile.xlsx"},
+    content = function(file) {write_xlsx(plyr::rbind.fill(resdata,calcdata.2), path = file)}
+  )
+  
+  ################# PLOTS
+  ###### PLOT 1
+  output$corplot1 <- renderPlot({
+    cplot1()
+  })
+  cplot1 <- eventReactive(input$update.2, {
+    plot_data <- calcdata.2
+    plot_data$vo2 <- plot_data$vo2/1000
+    plot_data$va <- plot_data$va/1000
+    vartoplot <- names(plot_data)[str_detect(names(plot_data),"alg2")]
+    pyLab <- vartoplot[1]
+    pxLab <- str_remove(vartoplot[1],".alg2")
+    pTitle <- paste0(pxLab," - Experimental vs Algorithm 2 correlation")
+    lim <- 200
+    create_cor_plot(plot_data,pxLab,pyLab,0,0.8*lim,c(0,lim),c(0,lim),c(pTitle,pxLab,pyLab))
+  })
+  
+  ###### PLOT 2
+  output$corplot2 <- renderPlot({
+    cplot2()
+  })
+  cplot2 <- eventReactive(input$update.2, {
+    plot_data <- calcdata.2
+    plot_data$vo2 <- plot_data$vo2/1000
+    plot_data$va <- plot_data$va/1000
+    vartoplot <- names(plot_data)[str_detect(names(plot_data),"alg2")]
+    pyLab <- vartoplot[2]
+    pxLab <- str_remove(vartoplot[2],".alg2")
+    pTitle <- paste0(pxLab," - Experimental vs Algorithm 2 correlation")
+    lim <- 40
+    create_cor_plot(plot_data,pxLab,pyLab,0,0.8*lim,c(0,lim),c(0,lim),c(pTitle,pxLab,pyLab))
+  })
+  
+  # ###### PLOT 3
+  # output$corplot3 <- renderPlot({
+  #   cplot3()
+  # })
+  # cplot3 <- eventReactive(input$update.2, {
+  #   plot_data <- calcdata.2
+  #   plot_data$vo2 <- plot_data$vo2/1000
+  #   plot_data$va <- plot_data$va/1000
+  #   vartoplot <- names(plot_data)[str_detect(names(plot_data),"alg2")]
+  #   pyLab <- vartoplot[3]
+  #   pxLab <- str_remove(vartoplot[3],".alg2")
+  #   pTitle <- paste0(pxLab," - Experimental vs Algorithm 2 correlation")
+  #   lim <- 25
+  #   create_cor_plot(plot_data,pxLab,pyLab,0,0.8*lim,c(0,lim),c(0,lim),c(pTitle,pxLab,pyLab))
+  # })
+  
+  ###### PLOT 4
+  output$corplot4 <- renderPlot({
+    cplot4()
+  })
+  cplot4 <- eventReactive(input$update.2, {
+    plot_data <- calcdata.2
+    plot_data$vo2 <- plot_data$vo2/1000
+    plot_data$vo2.alg2 <- plot_data$vo2.alg2/1000
+    vartoplot <- names(plot_data)[str_detect(names(plot_data),"alg2")]
+    pyLab <- vartoplot[4]
+    pxLab <- str_remove(vartoplot[4],".alg2")
+    pTitle <- paste0(pxLab," - Experimental vs Algorithm 2 correlation")
+    lim <- 5
+    create_cor_plot(plot_data,pxLab,pyLab,0,0.8*lim,c(0,lim),c(0,lim),c(pTitle,pxLab,pyLab))
+  })
+  
+  ###### PLOT 5
+  output$corplot5 <- renderPlot({
+    cplot5()
+  })
+  cplot5 <- eventReactive(input$update.2, {
+    plot_data <- calcdata.2
+    plot_data$vo2 <- plot_data$vo2/1000
+    plot_data$va <- plot_data$va/1000
+    vartoplot <- names(plot_data)[str_detect(names(plot_data),"alg2")]
+    pyLab <- vartoplot[5]
+    pxLab <- str_remove(vartoplot[5],".alg2")
+    pTitle <- paste0(pxLab," - Experimental vs Algorithm 2 correlation")
+    lim <- 150
+    create_cor_plot(plot_data,pxLab,pyLab,0,0.8*lim,c(0,lim),c(0,lim),c(pTitle,pxLab,pyLab))
+  })
+  
+  # ###### PLOT 6
+  # output$corplot6 <- renderPlot({
+  #   cplot6()
+  # })
+  # cplot6 <- eventReactive(input$update.2, {
+  #   plot_data <- calcdata.2
+  #   plot_data$vo2 <- plot_data$vo2/1000
+  #   plot_data$va <- plot_data$va/1000
+  #   vartoplot <- names(plot_data)[str_detect(names(plot_data),"alg2")]
+  #   pTitle <- "Correlation Plot"
+  #   pyLab <- vartoplot[6]
+  #   pxLab <- str_remove(vartoplot[6],".alg2")
+  #   lim <- 0.5
+  #   create_cor_plot(plot_data,pxLab,pyLab,0,0.8*lim,c(0,lim),c(0,lim),c(pTitle,pxLab,pyLab))
+  # })
+  
+  # ###### PLOT 7
+  # output$corplot7 <- renderPlot({
+  #   cplot7()
+  # })
+  # cplot7 <- eventReactive(input$update.2, {
+  #   plot_data <- calcdata.2
+  #   plot_data$vo2 <- plot_data$vo2/1000
+  #   plot_data$va <- plot_data$va/1000
+  #   vartoplot <- names(plot_data)[str_detect(names(plot_data),"alg2")]
+  #   pTitle <- "Correlation Plot"
+  #   pyLab <- vartoplot[7]
+  #   pxLab <- str_remove(vartoplot[7],".alg2")
+  #   lim <- 8
+  #   create_cor_plot(plot_data,pxLab,pyLab,0,0.8*lim,c(0,lim),c(0,lim),c(pTitle,pxLab,pyLab))
+  # })
+  
+  # ###### PLOT 8
+  # output$corplot8 <- renderPlot({
+  #   cplot8()
+  # })
+  # cplot8 <- eventReactive(input$update.2, {
+  #   plot_data <- calcdata.2
+  #   plot_data$vo2 <- plot_data$vo2/1000
+  #   plot_data$va <- plot_data$va/1000
+  #   vartoplot <- names(plot_data)[str_detect(names(plot_data),"alg2")]
+  #   pTitle <- "Correlation Plot"
+  #   pyLab <- vartoplot[8]
+  #   pxLab <- str_remove(vartoplot[8],".alg2")
+  #   lim <- 30
+  #   create_cor_plot(plot_data,pxLab,pyLab,0,0.8*lim,c(0,lim),c(0,lim),c(pTitle,pxLab,pyLab))
+  # })
+  
+  
+  
+  
+  
+  ##########################################################################################################################################
+  ## Patient Simulation (TAB 3)
+  ##########################################################################################################################################
+  # table 1 - INPUT PATIENT
+  output$init_meas <- DT::renderDataTable( df1tab3())
+  df1tab3 <- eventReactive(input$init_all, {
+    # patient <<- my_data[1,3:14]
+    patient <<- data.frame(pao2=97, paco2 = 40, pvo2=21, hb=14, vo2=1600, vco2=1900) # sample values for a single individual
+    DT::datatable(patient,editable=T,rownames=F,options=list(dom='t'))
+  })
+  
+  # table 2 - CALC PARAMS
+  output$calc_param <- DT::renderDataTable( df2tab3())
+  df2tab3 <- eventReactive(input$calcalg1, {
+    # if (is.na(patient$q)) {patient <- patient[,names(patient) != 'q']}
+    # if (is.na(patient$vo2)) {patient <- patient[,names(patient) != 'vo2']}
+    # if (is.na(patient$vco2)) {patient <- patient[,names(patient) != 'vco2']}
+    patres <<- calc_alg1(patient) %>% mutate_if(is.numeric,round,2)
+    patrestab <<- select(patres,q,avo2,hb,va,o2deliv,pA,vmax,p50,pmito,dmo2,dlo2,pmcap)
+    # patres <<- patres[,12:23]
+    DT::datatable(patrestab,editable=T,rownames=F,options=list(dom='t'))
+  },ignoreNULL = TRUE)
+  
+  #table 3 - RECALC INPUT
+  output$final_data <- DT::renderDataTable( df3tab3())
+  df3tab3 <- eventReactive(input$calcalg2, {
+    alg2tmp <- select(patrestab,va,q,hb,vmax,p50,dmo2,dlo2)
+    alg2res <- calc_alg2(alg2tmp) %>% mutate_if(is.numeric,round,2)
+    alg2res <- select(alg2res,pao2.alg2,pvo2.alg2,avo2.alg2,vo2.alg2,pA.alg2,pmito.alg2,vmax.alg2,q.alg2)
+    DT::datatable(alg2res,rownames=F,options=list(dom='t'))
+  },ignoreNULL = TRUE)
+  
+  #table 4 - PLUS/MINUS changed things!!
+  
+  
+  #observeevents to take into account updated values
+  observeEvent(input$init_meas_cell_edit,{
+    patient[1,input$init_meas_cell_edit$col+1] <<- as.numeric(input$init_meas_cell_edit$value)
+  })
+  observeEvent(input$calc_param_cell_edit,{
+    patrestab[1,input$calc_param_cell_edit$col+1] <<- as.numeric(input$calc_param_cell_edit$value)
+  })
   
 }
 shinyApp(ui = ui, server = server)
